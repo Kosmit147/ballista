@@ -41,22 +41,13 @@ main :: proc() {
   defer rl.CloseWindow()
   rl.SetTargetFPS(60)
 
+  game: Game
+  game_init(&game)
+  defer game_deinit(game)
+
   for !rl.WindowShouldClose() {
-    rl.BeginDrawing()
-
-    rl.ClearBackground(rl.RAYWHITE)
-    rl.DrawFPS(10, 10)
-    hello_world := cstring("Hello World!")
-    font_size := i32(40)
-    text_width := rl.MeasureText(hello_world, font_size)
-    rl.DrawText(
-      text = hello_world,
-      posX = WINDOW_WIDTH / 2 - text_width / 2,
-      posY = WINDOW_HEIGHT / 2 - font_size / 2,
-      fontSize = font_size,
-      color = rl.BLACK,
-    )
-
-    rl.EndDrawing()
+    dt := rl.GetFrameTime()
+    game_update(&game, dt)
+    game_draw(game)
   }
 }
