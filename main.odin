@@ -10,6 +10,7 @@ import "core:mem/virtual"
 GAME_NAME     :: "Ballista"
 WINDOW_WIDTH  :: 2560
 WINDOW_HEIGHT :: 1440
+TARGET_FPS    :: 60
 
 g_context: runtime.Context
 g_static_lifetime_arena: virtual.Arena
@@ -39,7 +40,7 @@ main :: proc() {
 
   rl.InitWindow(width = WINDOW_WIDTH, height = WINDOW_HEIGHT, title = GAME_NAME)
   defer rl.CloseWindow()
-  rl.SetTargetFPS(60)
+  rl.SetTargetFPS(TARGET_FPS)
 
   game: Game
   game_init(&game)
