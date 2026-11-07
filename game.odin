@@ -5,6 +5,8 @@ import b2 "vendor:box2d"
 
 import "core:container/handle_map"
 
+RENDER_SCALE :: 20
+
 Vec2 :: [2]f32
 Vec3 :: [3]f32
 Vec4 :: [4]f32
@@ -28,20 +30,26 @@ Entity :: struct {
 Entity_Map :: handle_map.Static_Handle_Map(MAX_ENTITIES, Entity, Entity_Handle)
 
 Game :: struct {
+  camera: rl.Camera2D,
   world: b2.WorldId,
   entity_map: ^Entity_Map,
 }
 
 game_init :: proc(game: ^Game) {
+  game.camera.target = { 0, 0 }
+  game.camera.offset = { f32(rl.GetRenderWidth()) / 2, f32(rl.GetRenderHeight()) / 2 }
+  game.camera.rotation = 0
+  game.camera.zoom = 1
+
   world_def := b2.DefaultWorldDef()
-  world_def.gravity = { 0, -10 }
+  world_def.gravity = { 0, 10 }
   game.world = b2.CreateWorld(world_def)
   game.entity_map = new(Entity_Map, g_static_lifetime_allocator)
 
   ground_body_def := b2.DefaultBodyDef()
-  ground_body_def.position = { 0, -10 }
+  ground_body_def.position = { 0, 35 }
   ground_body_id := b2.CreateBody(game.world, ground_body_def)
-  ground_box := b2.MakeBox(halfWidth = 50.0 / 2.0, halfHeight = 100.0 / 2.0)
+  ground_box := b2.MakeBox(halfWidth = 150.0 / 2.0, halfHeight = 10 / 2.0)
   ground_shape_def := b2.DefaultShapeDef()
   ground_shape_id := b2.CreatePolygonShape(ground_body_id, ground_shape_def, ground_box)
 
@@ -51,9 +59,9 @@ game_init :: proc(game: ^Game) {
     shape_id = ground_shape_id,
   })
 
-  for i in 0..<4 {
-    position := Vec2{ 40, 40 } * f32(i)
-    size := Vec2{ 20, 20 }
+  for i in 0..<75 {
+    position := Vec2{ -75, 0 } + Vec2{ 2 * f32(i), 2 }
+    size := Vec2{ 1, 1 }
 
     block_body_def := b2.DefaultBodyDef()
     block_body_def.type = .dynamicBody
@@ -77,15 +85,21 @@ game_deinit :: proc(game: Game) {
 }
 
 game_update :: proc(game: ^Game, dt: f32) {
+  CAMERA_MOVE_SPEED :: 100
+  CAMERA_ZOOM_SPEED :: 0.1
+
+  if rl.IsKeyDown(.W) do game.camera.target.y -= CAMERA_MOVE_SPEED * dt
+  if rl.IsKeyDown(.S) do game.camera.target.y += CAMERA_MOVE_SPEED * dt
+  if rl.IsKeyDown(.A) do game.camera.target.x -= CAMERA_MOVE_SPEED * dt
+  if rl.IsKeyDown(.D) do game.camera.target.x += CAMERA_MOVE_SPEED * dt
+
+  if rl.IsKeyDown(.UP)   do game.camera.zoom *= 1 + (CAMERA_ZOOM_SPEED * dt)
+  if rl.IsKeyDown(.DOWN) do game.camera.zoom *= 1 - (CAMERA_ZOOM_SPEED * dt)
+
   TIME_STEP     :: 1.0 / TARGET_FPS
   SUBSTEP_COUNT :: 4
 
   b2.World_Step(game.world, TIME_STEP, SUBSTEP_COUNT)
-
-  iterator := handle_map.iterator_make(game.entity_map)
-  for entity, handle in handle_map.iterate(&iterator) {
-    // entity.position += { 10, 10 } * dt
-  }
 }
 
 game_draw :: proc(game: Game) {
@@ -95,39 +109,31 @@ game_draw :: proc(game: Game) {
   rl.ClearBackground(rl.WHITE)
   rl.DrawFPS(10, 10)
 
-  text: cstring
-  if rl.IsKeyDown(.SPACE) {
-    text = "Ballista"
-  } else {
-    text = "Hello World!"
-  }
+  {
+    rl.BeginMode2D(game.camera)
 
-  font_size := i32(40)
-  text_width := rl.MeasureText(text, font_size)
-  rl.DrawText(
-    text = text,
-    posX = WINDOW_WIDTH / 2 - text_width / 2,
-    posY = WINDOW_HEIGHT / 2 - font_size / 2,
-    fontSize = font_size,
-    color = rl.BLACK,
-  )
+    font_size := i32(40)
+    text_width := rl.MeasureText(GAME_NAME, font_size)
 
-  iterator := handle_map.iterator_make(game.entity_map)
-  for entity, handle in handle_map.iterate(&iterator) {
-    bounds := b2.Shape_GetBounds(entity.shape_id)
-    lines := [4][2]Vec2{
-      { { bounds.lowerBound.x, bounds.upperBound.y }, bounds.upperBound },
-      { bounds.upperBound, { bounds.upperBound.x, bounds.lowerBound.y } },
-      { { bounds.upperBound.x, bounds.lowerBound.y }, bounds.lowerBound },
-      { bounds.lowerBound, { bounds.lowerBound.x, bounds.upperBound.y } },
-    }
-    color := rl.RED if entity.kind == .Small_Block else rl.GREEN
-    for line in lines {
-      rl.DrawLineV(
-        startPos = line[0],
-        endPos = line[1],
+    rl.DrawText(
+      text = GAME_NAME,
+      posX = -text_width / 2,
+      posY = -font_size / 2,
+      fontSize = font_size,
+      color = rl.BLACK,
+    )
+
+    iterator := handle_map.iterator_make(game.entity_map)
+    for entity, handle in handle_map.iterate(&iterator) {
+      color := rl.RED if entity.kind == .Small_Block else rl.GREEN
+      bounds := b2.Shape_GetBounds(entity.shape_id)
+      rl.DrawRectangleV(
+        position = bounds.lowerBound * RENDER_SCALE,
+        size = (bounds.upperBound - bounds.lowerBound) * RENDER_SCALE,
         color = color,
       )
     }
+
+    defer rl.EndMode2D()
   }
 }
