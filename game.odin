@@ -5,9 +5,13 @@ import b2 "vendor:box2d"
 
 import "core:container/handle_map"
 import "core:log"
+import "core:math/linalg"
 
-RENDER_SCALE :: 20
-PROJECTILE_RADIUS :: 0.5
+RENDER_SCALE           :: 20
+PROJECTILE_RADIUS      :: 0.5
+PHYSICS_THREADS        :: 4
+ANCHOR_POSITION        :: Vec2{ -50, 20 }
+MAX_DISTANCE_TO_ANCHOR :: 5
 
 Vec2 :: [2]f32
 Vec3 :: [3]f32
@@ -19,13 +23,13 @@ Entity_Handle :: handle_map.Handle32
 
 Entity_Kind :: enum {
   Ground,
-  Small_Block,
+  Block,
   Projectile,
 }
 
 @(rodata) entity_colors := [Entity_Kind]rl.Color{
   .Ground = rl.GREEN,
-  .Small_Block = rl.RED,
+  .Block = rl.RED,
   .Projectile = rl.BLUE,
 }
 
@@ -42,6 +46,7 @@ Game :: struct {
   camera: rl.Camera2D,
   world: b2.WorldId,
   entity_map: ^Entity_Map,
+  projectile_position: Vec2,
 }
 
 game_init :: proc(game: ^Game) {
@@ -54,38 +59,29 @@ game_init :: proc(game: ^Game) {
 
   world_def := b2.DefaultWorldDef()
   world_def.gravity = { 0, 10 }
+  world_def.workerCount = PHYSICS_THREADS
   game.world = b2.CreateWorld(world_def)
 
-  ground_body_def := b2.DefaultBodyDef()
-  ground_body_def.position = { 0, 35 }
-  ground_body_id := b2.CreateBody(game.world, ground_body_def)
-  ground_box := b2.MakeBox(halfWidth = 150.0 / 2.0, halfHeight = 10 / 2.0)
-  ground_shape_def := b2.DefaultShapeDef()
-  ground_shape_id := b2.CreatePolygonShape(ground_body_id, ground_shape_def, ground_box)
+  game.projectile_position = ANCHOR_POSITION
 
-  _ = handle_map.add(game.entity_map, Entity{
-    kind = .Ground,
-    body_id = ground_body_id,
-    shape_id = ground_shape_id,
-  })
+  {
+    ground_body_def := b2.DefaultBodyDef()
+    ground_body_def.position = { 0, 35 }
+    ground_body_id := b2.CreateBody(game.world, ground_body_def)
+    ground_box := b2.MakeBox(halfWidth = 150.0 / 2.0, halfHeight = 10 / 2.0)
+    ground_shape_def := b2.DefaultShapeDef()
+    ground_shape_id := b2.CreatePolygonShape(ground_body_id, ground_shape_def, ground_box)
+
+    _ = handle_map.add(game.entity_map, Entity{
+      kind = .Ground,
+      body_id = ground_body_id,
+      shape_id = ground_shape_id,
+    })
+  }
 
   for i in 0..<75 {
     position := Vec2{ -75, 0 } + Vec2{ 2 * f32(i), 2 }
-
-    block_body_def := b2.DefaultBodyDef()
-    block_body_def.type = .dynamicBody
-    block_body_def.position = position
-    block_body_id := b2.CreateBody(game.world, block_body_def)
-    dynamic_box := b2.MakeBox(halfWidth = 1.0 / 2, halfHeight = 1.0 / 2)
-    shape_def := b2.DefaultShapeDef()
-    shape_def.material.friction = 0.3
-    block_shape_id := b2.CreatePolygonShape(block_body_id, shape_def, dynamic_box)
-
-    _ = handle_map.add(game.entity_map, Entity{
-      kind = .Small_Block,
-      body_id = block_body_id,
-      shape_id = block_shape_id,
-    })
+    _game_add_block(game, position)
   }
 }
 
@@ -105,24 +101,20 @@ game_update :: proc(game: ^Game, dt: f32) {
   if rl.IsKeyDown(.UP)   do game.camera.zoom *= 1 + (CAMERA_ZOOM_SPEED * dt)
   if rl.IsKeyDown(.DOWN) do game.camera.zoom *= 1 - (CAMERA_ZOOM_SPEED * dt)
 
-  mouse_position := rl.GetScreenToWorld2D(rl.GetMousePosition(), game.camera) / RENDER_SCALE
+  pointer_position := rl.GetScreenToWorld2D(rl.GetMousePosition(), game.camera) / RENDER_SCALE
 
   if rl.IsMouseButtonDown(.LEFT) {
-    projectile_body_def := b2.DefaultBodyDef()
-    projectile_body_def.type = .dynamicBody
-    projectile_body_def.position = mouse_position
-    projectile_body_id := b2.CreateBody(game.world, projectile_body_def)
-    circle: b2.Circle
-    circle.radius = PROJECTILE_RADIUS
-    shape_def := b2.DefaultShapeDef()
-    shape_def.material.friction = 0.3
-    projectile_shape_id := b2.CreateCircleShape(projectile_body_id, shape_def, circle)
+    projectile_offset := linalg.clamp_length(pointer_position - ANCHOR_POSITION, MAX_DISTANCE_TO_ANCHOR)
+    game.projectile_position = ANCHOR_POSITION + projectile_offset
+  } else if rl.IsMouseButtonReleased(.LEFT) {
+    projectile_offset := linalg.clamp_length(pointer_position - ANCHOR_POSITION, MAX_DISTANCE_TO_ANCHOR)
+    projectile_velocity := -projectile_offset
+    _game_add_projectile(game, ANCHOR_POSITION + projectile_offset, projectile_velocity * 5)
+    game.projectile_position = ANCHOR_POSITION
+  }
 
-    _ = handle_map.add(game.entity_map, Entity{
-      kind = .Projectile,
-      body_id = projectile_body_id,
-      shape_id = projectile_shape_id,
-    })
+  if rl.IsMouseButtonPressed(.RIGHT) {
+    _game_add_projectile(game, pointer_position)
   }
 
   TIME_STEP     :: 1.0 / TARGET_FPS
@@ -156,7 +148,7 @@ game_draw :: proc(game: Game) {
     for entity, handle in handle_map.iterate(&iterator) {
       entity_color := entity_colors[entity.kind]
       switch entity.kind {
-      case .Ground, .Small_Block:
+      case .Ground, .Block:
         bounds := b2.Shape_GetBounds(entity.shape_id)
         rl.DrawRectangleV(
           position = bounds.lowerBound * RENDER_SCALE,
@@ -173,6 +165,54 @@ game_draw :: proc(game: Game) {
       }
     }
 
+    rl.DrawCircleV(
+      center = ANCHOR_POSITION * RENDER_SCALE,
+      radius = 0.15 * RENDER_SCALE,
+      color = rl.BLACK,
+    )
+
+    rl.DrawCircleV(
+      center = game.projectile_position * RENDER_SCALE,
+      radius = PROJECTILE_RADIUS * RENDER_SCALE,
+      color = entity_colors[.Projectile],
+    )
+
     defer rl.EndMode2D()
   }
+}
+
+_game_add_block :: proc(game: ^Game, position: Vec2) {
+  block_body_def := b2.DefaultBodyDef()
+  block_body_def.type = .dynamicBody
+  block_body_def.position = position
+  block_body_id := b2.CreateBody(game.world, block_body_def)
+  dynamic_box := b2.MakeBox(halfWidth = 1.0 / 2, halfHeight = 1.0 / 2)
+  shape_def := b2.DefaultShapeDef()
+  shape_def.material.friction = 0.3
+  block_shape_id := b2.CreatePolygonShape(block_body_id, shape_def, dynamic_box)
+
+  _ = handle_map.add(game.entity_map, Entity{
+    kind = .Block,
+    body_id = block_body_id,
+    shape_id = block_shape_id,
+  })
+}
+
+_game_add_projectile :: proc(game: ^Game, position: Vec2, velocity: Vec2 = 0) {
+  projectile_body_def := b2.DefaultBodyDef()
+  projectile_body_def.type = .dynamicBody
+  projectile_body_def.position = position
+  projectile_body_def.linearVelocity = velocity
+  projectile_body_id := b2.CreateBody(game.world, projectile_body_def)
+  circle: b2.Circle
+  circle.radius = PROJECTILE_RADIUS
+  shape_def := b2.DefaultShapeDef()
+  shape_def.material.friction = 0.3
+  projectile_shape_id := b2.CreateCircleShape(projectile_body_id, shape_def, circle)
+
+  _ = handle_map.add(game.entity_map, Entity{
+    kind = .Projectile,
+    body_id = projectile_body_id,
+    shape_id = projectile_shape_id,
+  })
 }
