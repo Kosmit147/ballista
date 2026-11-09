@@ -10,15 +10,21 @@ import "core:math/linalg"
 
 TEXTURES_DIR :: "assets/textures/"
 
-PIXELS_PER_METER       :: 20
-PROJECTILE_RADIUS      :: 10
-PROJECTILE_DENSITY     :: 2.5
-ANCHOR_POSITION        :: Vec2{ -1000, 400 }
-MAX_DISTANCE_TO_ANCHOR :: 160
+PIXELS_PER_METER             :: 20
+PROJECTILE_RADIUS            :: 10
+PROJECTILE_DENSITY           :: 2.5
+ANCHOR_POSITION              :: Vec2{ -1000, 400 }
+MAX_DISTANCE_TO_ANCHOR       :: 160
+DRAW_ORIGIN_POINTS           :: true
+PROJECTILE_TRAJECTORY_POINTS :: 20
+PROJECTILE_TRAJECTORY_STEP   :: 10
+
+PHYSICS_GRAVITY        :: Vec2{ 0, 10 * PIXELS_PER_METER }
+PHYSICS_TIME_STEP      :: 1.0 / TARGET_FPS
+PHYSICS_SUBSTEP_COUNT  :: 4
 PHYSICS_ENABLED        :: true
 PHYSICS_THREADS        :: 4
 PHYSICS_SLEEP_ENABLED  :: true
-DRAW_ORIGIN_POINTS     :: true
 
 BLOCK_MAX_HEALTH :: 100
 MIN_DAMAGE       :: 0
@@ -53,7 +59,9 @@ Game :: struct {
   camera: rl.Camera2D,
   world: b2.WorldId,
   entity_map: ^Entity_Map,
-  projectile_position: Vec2,
+  aiming: bool,
+  aimed_projectile_position: Vec2,
+  aimed_projectile_velocity: Vec2,
 
   background_texture: rl.Texture2D,
 
@@ -85,12 +93,13 @@ game_init :: proc(game: ^Game) {
   game.camera.zoom = 1
 
   world_def := b2.DefaultWorldDef()
-  world_def.gravity = { 0, 10 * PIXELS_PER_METER }
+  world_def.gravity = PHYSICS_GRAVITY
   world_def.enableSleep = PHYSICS_SLEEP_ENABLED
   world_def.workerCount = PHYSICS_THREADS
   game.world = b2.CreateWorld(world_def)
 
-  game.projectile_position = ANCHOR_POSITION
+  game.aimed_projectile_position = ANCHOR_POSITION
+  game.aimed_projectile_velocity = 0
 
   _game_add_ground(game, { 0, 700 }, { 3000, 200 })
 
@@ -135,24 +144,28 @@ game_update :: proc(game: ^Game, dt: f32) {
 
   pointer_position := rl.GetScreenToWorld2D(rl.GetMousePosition(), game.camera)
 
-  if rl.IsMouseButtonDown(.LEFT) {
+  {
     projectile_offset := linalg.clamp_length(pointer_position - ANCHOR_POSITION, MAX_DISTANCE_TO_ANCHOR)
-    game.projectile_position = ANCHOR_POSITION + projectile_offset
-  } else if rl.IsMouseButtonReleased(.LEFT) {
-    projectile_offset := linalg.clamp_length(pointer_position - ANCHOR_POSITION, MAX_DISTANCE_TO_ANCHOR)
-    projectile_velocity := -projectile_offset
-    _game_add_projectile(game, ANCHOR_POSITION + projectile_offset, projectile_velocity * 5)
-    game.projectile_position = ANCHOR_POSITION
+    projectile_position := ANCHOR_POSITION + projectile_offset
+    projectile_velocity := -projectile_offset * 5
+
+    if rl.IsMouseButtonDown(.LEFT) {
+      game.aiming = true
+      game.aimed_projectile_position = projectile_position
+      game.aimed_projectile_velocity = projectile_velocity
+    } else if rl.IsMouseButtonReleased(.LEFT) {
+      game.aiming = false
+      game.aimed_projectile_position = ANCHOR_POSITION
+      game.aimed_projectile_velocity = 0
+      _game_add_projectile(game, projectile_position, projectile_velocity)
+    }
+
+    if rl.IsMouseButtonPressed(.RIGHT) {
+      _game_add_projectile(game, pointer_position)
+    }
   }
 
-  if rl.IsMouseButtonPressed(.RIGHT) {
-    _game_add_projectile(game, pointer_position)
-  }
-
-  TIME_STEP     :: 1.0 / TARGET_FPS
-  SUBSTEP_COUNT :: 4
-
-  when PHYSICS_ENABLED { b2.World_Step(game.world, TIME_STEP, SUBSTEP_COUNT) }
+  when PHYSICS_ENABLED { b2.World_Step(game.world, PHYSICS_TIME_STEP, PHYSICS_SUBSTEP_COUNT) }
 
   deletion_queue := make([dynamic]Entity_Handle, context.temp_allocator)
 
@@ -218,6 +231,15 @@ game_draw :: proc(game: Game) {
       tint = rl.WHITE,
     )
 
+    if game.aiming {
+      _draw_trajectory(
+        origin = game.aimed_projectile_position,
+        velocity = game.aimed_projectile_velocity,
+        points = PROJECTILE_TRAJECTORY_POINTS,
+        step = PROJECTILE_TRAJECTORY_STEP,
+      )
+    }
+
     iterator := handle_map.iterator_make(game.entity_map)
     for entity, handle in handle_map.iterate(&iterator) {
       entity_color := _get_entity_color(entity^)
@@ -276,7 +298,7 @@ game_draw :: proc(game: Game) {
     )
 
     rl.DrawCircleV(
-      center = game.projectile_position,
+      center = game.aimed_projectile_position,
       radius = PROJECTILE_RADIUS,
       color = entity_colors[.Projectile],
     )
@@ -380,6 +402,15 @@ _draw_point :: proc(point: Vec2, radius: f32 = 3, color := rl.MAGENTA) {
     radius = radius,
     color = color,
   )
+}
+
+_draw_trajectory :: proc(origin: Vec2, velocity: Vec2, points: uint, step: uint) {
+  for i in 1..=points {
+    time := f32(i * step) * PHYSICS_TIME_STEP
+    position := origin + velocity * time + 0.5 * PHYSICS_GRAVITY * time * time
+    alpha := f32(points - i) / f32(points) * 255
+    _draw_point(position, color = { 0, 0, 0, u8(alpha) })
+  }
 }
 
 _calculate_damage :: proc(approach_speed: f32) -> f32 {
