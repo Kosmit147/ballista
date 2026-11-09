@@ -8,6 +8,8 @@ import "core:log"
 import "core:math"
 import "core:math/linalg"
 
+TEXTURES_DIR :: "assets/textures/"
+
 PIXELS_PER_METER       :: 20
 PROJECTILE_RADIUS      :: 10
 PROJECTILE_DENSITY     :: 2.5
@@ -52,10 +54,28 @@ Game :: struct {
   world: b2.WorldId,
   entity_map: ^Entity_Map,
   projectile_position: Vec2,
+
+  background_texture: rl.Texture2D,
+
+  wood_texture: rl.Texture2D,
+  wood_texture_npatch: rl.NPatchInfo,
 }
 
 game_init :: proc(game: ^Game) {
   b2.SetLengthUnitsPerMeter(PIXELS_PER_METER)
+
+  game.background_texture = rl.LoadTexture(
+    TEXTURES_DIR + "background_elements_remastered/Backgrounds/backgroundCastles.png",
+  )
+  game.wood_texture = rl.LoadTexture(TEXTURES_DIR + "physics_elements/Wood elements/elementWood010.png")
+  game.wood_texture_npatch = rl.NPatchInfo {
+    source = rl.Rectangle { 0, 0, 70, 70 },
+    left = 12,
+    top = 12,
+    right = 12,
+    bottom = 12,
+    layout = .NINE_PATCH,
+  }
 
   game.entity_map = new(Entity_Map, g_static_lifetime_allocator)
 
@@ -97,11 +117,13 @@ game_init :: proc(game: ^Game) {
 
 game_deinit :: proc(game: Game) {
   b2.DestroyWorld(game.world)
+  rl.UnloadTexture(game.wood_texture)
+  rl.UnloadTexture(game.background_texture)
 }
 
 game_update :: proc(game: ^Game, dt: f32) {
-  CAMERA_MOVE_SPEED :: 100
-  CAMERA_ZOOM_SPEED :: 0.1
+  CAMERA_MOVE_SPEED :: 200
+  CAMERA_ZOOM_SPEED :: 0.3
 
   if rl.IsKeyDown(.W) do game.camera.target.y -= CAMERA_MOVE_SPEED * dt
   if rl.IsKeyDown(.S) do game.camera.target.y += CAMERA_MOVE_SPEED * dt
@@ -138,7 +160,6 @@ game_update :: proc(game: ^Game, dt: f32) {
 
   for i in 0..<contact_events.hitCount {
     hit_event := contact_events.hitEvents[i]
-    log.debugf("%#v", hit_event)
 
     entity_handle_a := transmute(Entity_Handle)b2.Shape_GetUserData(hit_event.shapeIdA)
     entity_handle_b := transmute(Entity_Handle)b2.Shape_GetUserData(hit_event.shapeIdB)
@@ -189,11 +210,19 @@ game_draw :: proc(game: Game) {
       color = rl.BLACK,
     )
 
+    rl.DrawTextureEx(
+      texture = game.background_texture,
+      position = { -1500, -1500 },
+      rotation = 0,
+      scale = 3,
+      tint = rl.WHITE,
+    )
+
     iterator := handle_map.iterator_make(game.entity_map)
     for entity, handle in handle_map.iterate(&iterator) {
       entity_color := _get_entity_color(entity^)
       switch entity.kind {
-      case .Ground, .Block:
+      case .Ground:
         transform := b2.Body_GetTransform(entity.body_id)
         position := transform.p
         rotation := transform.q
@@ -208,6 +237,25 @@ game_draw :: proc(game: Game) {
           origin = size / 2,
           rotation = linalg.to_degrees(b2.Rot_GetAngle(rotation)),
           color = entity_color,
+        )
+        when DRAW_ORIGIN_POINTS { _draw_point(position) }
+      case .Block:
+        transform := b2.Body_GetTransform(entity.body_id)
+        position := transform.p
+        rotation := transform.q
+        size := entity.box_size
+        rl.DrawTextureNPatch(
+          texture = game.wood_texture,
+          nPatchInfo = game.wood_texture_npatch,
+          dstrec = rl.Rectangle{
+            x = position.x,
+            y = position.y,
+            width = size.x,
+            height = size.y,
+          },
+          origin = size / 2,
+          rotation = linalg.to_degrees(b2.Rot_GetAngle(rotation)),
+          tint = entity_color,
         )
         when DRAW_ORIGIN_POINTS { _draw_point(position) }
       case .Projectile:
@@ -341,7 +389,7 @@ _calculate_damage :: proc(approach_speed: f32) -> f32 {
 
 @(rodata) entity_colors := [Entity_Kind]rl.Color{
   .Ground     = { 0, 255, 0, 255 },
-  .Block      = { 255, 0, 0, 255 },
+  .Block      = { 255, 255, 255, 255 },
   .Projectile = { 0, 0, 255, 255 },
 }
 
