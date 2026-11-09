@@ -13,6 +13,7 @@ TEXTURES_DIR :: "assets/textures/"
 PIXELS_PER_METER             :: 20
 PROJECTILE_RADIUS            :: 10
 PROJECTILE_DENSITY           :: 2.5
+PROJECTILE_COLOR             :: rl.BLUE
 ANCHOR_POSITION              :: Vec2{ -1000, 400 }
 MAX_DISTANCE_TO_ANCHOR       :: 160
 DRAW_ORIGIN_POINTS           :: true
@@ -65,6 +66,8 @@ Game :: struct {
   aimed_projectile_position: Vec2,
   aimed_projectile_velocity: Vec2,
 
+  white_texture: rl.Texture2D,
+  magenta_texture: rl.Texture2D,
   background_texture: rl.Texture2D,
   block_textures: [Material][Damage_Level]rl.Texture2D,
 }
@@ -98,6 +101,15 @@ game_init :: proc(game: ^Game) {
 
   game.aimed_projectile_position = ANCHOR_POSITION
   game.aimed_projectile_velocity = 0
+
+  white_image := rl.GenImageColor(1, 1, rl.WHITE)
+  defer rl.UnloadImage(white_image)
+
+  magenta_image := rl.GenImageColor(1, 1, rl.MAGENTA)
+  defer rl.UnloadImage(magenta_image)
+
+  game.white_texture = rl.LoadTextureFromImage(white_image)
+  game.magenta_texture = rl.LoadTextureFromImage(magenta_image)
 
   game.background_texture = rl.LoadTexture(
     TEXTURES_DIR + "background_elements_remastered/Backgrounds/backgroundCastles.png",
@@ -140,6 +152,8 @@ game_deinit :: proc(game: Game) {
   }
 
   rl.UnloadTexture(game.background_texture)
+  rl.UnloadTexture(game.magenta_texture)
+  rl.UnloadTexture(game.white_texture)
 
   handle_map.clear(game.entity_map)
   free(game.entity_map)
@@ -365,7 +379,7 @@ _game_remove_entity :: proc(game: ^Game, entity_handle: Entity_Handle) -> (ok :=
 }
 
 _game_draw_entity :: proc(game: ^Game, entity: ^Entity) {
-  color := _get_entity_tint(entity^)
+  texture, color := _game_get_entity_texture_and_color(game, entity^)
   switch entity.kind {
   case .Ground:
     transform := b2.Body_GetTransform(entity.body_id)
@@ -390,7 +404,7 @@ _game_draw_entity :: proc(game: ^Game, entity: ^Entity) {
     rotation := transform.q
     size := entity.box_size
     rl.DrawTextureNPatch(
-      texture = _game_get_block_texture(game, entity)^,
+      texture = texture,
       nPatchInfo = BLOCK_TEXTURE_NPATCH,
       dstrec = rl.Rectangle{
         x = position.x,
@@ -400,7 +414,7 @@ _game_draw_entity :: proc(game: ^Game, entity: ^Entity) {
       },
       origin = size / 2,
       rotation = linalg.to_degrees(b2.Rot_GetAngle(rotation)),
-      tint = rl.WHITE,
+      tint = color,
     )
     when DRAW_ORIGIN_POINTS { _draw_point(position) }
   case .Projectile:
@@ -414,6 +428,20 @@ _game_draw_entity :: proc(game: ^Game, entity: ^Entity) {
   }
 }
 
+_game_get_entity_texture_and_color :: proc(game: ^Game, entity: Entity) -> (rl.Texture2D, rl.Color) {
+  switch entity.kind {
+  case .Ground:
+    return game.white_texture, rl.GREEN
+  case .Block:
+    damage_level := _get_block_damage_level(entity)
+    return game.block_textures[entity.block_material][damage_level], rl.WHITE
+  case .Projectile:
+    return game.white_texture, PROJECTILE_COLOR
+  }
+
+  return game.magenta_texture, rl.WHITE
+}
+
 _draw_trajectory :: proc(origin: Vec2, velocity: Vec2, points: uint, step: uint) {
   for i in 1..=points {
     time := f32(i * step) * PHYSICS_TIME_STEP
@@ -421,27 +449,6 @@ _draw_trajectory :: proc(origin: Vec2, velocity: Vec2, points: uint, step: uint)
     alpha := f32(points - i) / f32(points) * 255
     _draw_point(position, color = { 0, 0, 0, u8(alpha) })
   }
-}
-
-_game_get_block_texture :: proc(game: ^Game, block: ^Entity) -> ^rl.Texture2D {
-  damage_level := _get_block_damage_level(block)
-  return &game.block_textures[block.block_material][damage_level]
-}
-
-@(rodata) entity_colors := [Entity_Kind]rl.Color{
-  .Ground     = { 0, 255, 0, 255 },
-  .Block      = { 255, 255, 255, 255 },
-  .Projectile = { 0, 0, 255, 255 },
-}
-
-_get_entity_tint :: proc(entity: Entity) -> rl.Color {
-  color := entity_colors[entity.kind]
-  if entity.kind == .Block {
-    f32_color := cast(Vec4)color
-    f32_color.rgb *= entity.health / BLOCK_MAX_HEALTH
-    color = cast(rl.Color)(f32_color)
-  }
-  return color
 }
 
 _draw_point :: proc(point: Vec2, radius: f32 = 3, color := rl.MAGENTA) {
@@ -464,7 +471,7 @@ _draw_projectile :: proc(position: Vec2) {
   rl.DrawCircleV(
     center = position,
     radius = PROJECTILE_RADIUS,
-    color = entity_colors[.Projectile],
+    color = PROJECTILE_COLOR,
   )
 }
 
@@ -473,7 +480,7 @@ _calculate_damage :: proc(approach_speed: f32) -> f32 {
   return math.lerp(f32(MIN_DAMAGE), f32(MAX_DAMAGE), t)
 }
 
-_get_block_damage_level :: proc(entity: ^Entity) -> Damage_Level {
+_get_block_damage_level :: proc(entity: Entity) -> Damage_Level {
   health_factor := entity.health / BLOCK_MAX_HEALTH
   switch health_factor {
   case 0.75..=1000.0:
