@@ -47,6 +47,7 @@ main :: proc() {
   defer game_deinit(game)
 
   for !rl.WindowShouldClose() {
+    free_all(context.temp_allocator)
     dt := rl.GetFrameTime()
     game_update(&game, dt)
     game_draw(game)

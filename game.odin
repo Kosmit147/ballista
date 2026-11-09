@@ -18,24 +18,22 @@ PHYSICS_THREADS        :: 4
 PHYSICS_SLEEP_ENABLED  :: true
 DRAW_ORIGIN_POINTS     :: true
 
+BLOCK_MAX_HEALTH :: 100
+MIN_DAMAGE       :: 0
+MAX_DAMAGE       :: 80
+
 Vec2 :: [2]f32
 Vec3 :: [3]f32
 Vec4 :: [4]f32
 
 MAX_ENTITIES :: 20000
 
-Entity_Handle :: handle_map.Handle32
+Entity_Handle :: handle_map.Handle64
 
 Entity_Kind :: enum {
   Ground,
   Block,
   Projectile,
-}
-
-@(rodata) entity_colors := [Entity_Kind]rl.Color{
-  .Ground     = { 0, 255, 0, 255 },
-  .Block      = { 255, 0, 0, 255 },
-  .Projectile = { 0, 0, 255, 255 },
 }
 
 Entity :: struct {
@@ -44,6 +42,7 @@ Entity :: struct {
   body_id: b2.BodyId,
   shape_id: b2.ShapeId,
   box_size: Vec2,
+  health: f32,
 }
 
 Entity_Map :: handle_map.Static_Handle_Map(MAX_ENTITIES, Entity, Entity_Handle)
@@ -73,21 +72,7 @@ game_init :: proc(game: ^Game) {
 
   game.projectile_position = ANCHOR_POSITION
 
-  {
-    ground_body_def := b2.DefaultBodyDef()
-    ground_body_def.position = { 0, 700 }
-    ground_body_id := b2.CreateBody(game.world, ground_body_def)
-    ground_box := b2.MakeBox(halfWidth = 3000.0 / 2.0, halfHeight = 200.0 / 2.0)
-    ground_shape_def := b2.DefaultShapeDef()
-    ground_shape_id := b2.CreatePolygonShape(ground_body_id, ground_shape_def, ground_box)
-
-    _ = handle_map.add(game.entity_map, Entity{
-      kind = .Ground,
-      body_id = ground_body_id,
-      shape_id = ground_shape_id,
-      box_size = { 3000, 200 },
-    })
-  }
+  _game_add_ground(game, { 0, 700 }, { 3000, 200 })
 
   _game_add_block(game, {   0,  500 }, {  20, 200 })
   _game_add_block(game, { 200,  500 }, {  20, 200 })
@@ -146,6 +131,41 @@ game_update :: proc(game: ^Game, dt: f32) {
   SUBSTEP_COUNT :: 4
 
   when PHYSICS_ENABLED { b2.World_Step(game.world, TIME_STEP, SUBSTEP_COUNT) }
+
+  deletion_queue := make([dynamic]Entity_Handle, context.temp_allocator)
+
+  contact_events := b2.World_GetContactEvents(game.world)
+
+  for i in 0..<contact_events.hitCount {
+    hit_event := contact_events.hitEvents[i]
+    log.debugf("%#v", hit_event)
+
+    entity_handle_a := transmute(Entity_Handle)b2.Shape_GetUserData(hit_event.shapeIdA)
+    entity_handle_b := transmute(Entity_Handle)b2.Shape_GetUserData(hit_event.shapeIdB)
+
+    entity_a, _ := handle_map.get(game.entity_map, entity_handle_a)
+    entity_b, _ := handle_map.get(game.entity_map, entity_handle_b)
+
+    if entity_a.kind == .Block {
+      damage := _calculate_damage(hit_event.approachSpeed)
+      entity_a.health -= damage
+      if entity_a.health <= 0 {
+        append(&deletion_queue, entity_a.handle)
+      }
+    }
+
+    if entity_b.kind == .Block {
+      damage := _calculate_damage(hit_event.approachSpeed)
+      entity_b.health -= damage
+      if entity_b.health <= 0 {
+        append(&deletion_queue, entity_b.handle)
+      }
+    }
+  }
+
+  for entity_handle in deletion_queue {
+    _game_remove_entity(game, entity_handle)
+  }
 }
 
 game_draw :: proc(game: Game) {
@@ -171,7 +191,7 @@ game_draw :: proc(game: Game) {
 
     iterator := handle_map.iterator_make(game.entity_map)
     for entity, handle in handle_map.iterate(&iterator) {
-      entity_color := entity_colors[entity.kind]
+      entity_color := _get_entity_color(entity^)
       switch entity.kind {
       case .Ground, .Block:
         transform := b2.Body_GetTransform(entity.body_id)
@@ -213,55 +233,72 @@ game_draw :: proc(game: Game) {
       color = entity_colors[.Projectile],
     )
 
-    // {
-    //   test_position := Vec2{ 10, 10 }
-    //   test_size := Vec2{ 10, 3 }
-    //   @(static) rotation: f32 = 0
-    //   rotation += 1
-
-    //   rl.DrawRectanglePro(
-    //     rec = rl.Rectangle{
-    //       x = test_position.x,
-    //       y = test_position.y,
-    //       width = test_size.x,
-    //       height = test_size.y,
-    //     },
-    //     origin = test_size / 2,
-    //     rotation = rotation,
-    //     color = rl.BLUE,
-    //   )
-    //   rl.DrawCircleV(
-    //     center = test_position,
-    //     radius = 0.2,
-    //     color = rl.BLACK,
-    //   )
-    // }
-
     defer rl.EndMode2D()
   }
 }
 
-_game_add_block :: proc(game: ^Game, position: Vec2, size: Vec2, rotation: f32 = 0) {
+_game_add_ground :: proc(game: ^Game, position: Vec2, size: Vec2) -> (ok := false) {
+  entity_handle := handle_map.add(game.entity_map, Entity{
+    kind = .Ground,
+    box_size = { 3000, 200 },
+  }) or_return
+
+  entity := handle_map.get(game.entity_map, entity_handle) or_return
+
+  ground_body_def := b2.DefaultBodyDef()
+  ground_body_def.userData = transmute(rawptr)entity_handle
+  ground_body_def.position = position
+  ground_body_id := b2.CreateBody(game.world, ground_body_def)
+  ground_box := b2.MakeBox(halfWidth = size.x / 2, halfHeight = size.y / 2)
+  ground_shape_def := b2.DefaultShapeDef()
+  ground_shape_def.userData = transmute(rawptr)entity_handle
+  ground_shape_id := b2.CreatePolygonShape(ground_body_id, ground_shape_def, ground_box)
+
+  entity.body_id = ground_body_id
+  entity.shape_id = ground_shape_id
+
+  ok = true
+  return
+}
+
+_game_add_block :: proc(game: ^Game, position: Vec2, size: Vec2, rotation: f32 = 0) -> (ok := false) {
+  entity_handle := handle_map.add(game.entity_map, Entity{
+    kind = .Block,
+    box_size = size,
+    health = BLOCK_MAX_HEALTH,
+  }) or_return
+
+  entity := handle_map.get(game.entity_map, entity_handle) or_return
+
   block_body_def := b2.DefaultBodyDef()
+  block_body_def.userData = transmute(rawptr)entity_handle
   block_body_def.type = .dynamicBody
   block_body_def.position = position
   block_body_def.rotation = b2.MakeRot(rotation)
   block_body_id := b2.CreateBody(game.world, block_body_def)
   dynamic_box := b2.MakeBox(halfWidth = size.x / 2, halfHeight = size.y / 2)
   shape_def := b2.DefaultShapeDef()
+  shape_def.userData = transmute(rawptr)entity_handle
   shape_def.material.friction = 0.3
+  shape_def.enableHitEvents = true
   block_shape_id := b2.CreatePolygonShape(block_body_id, shape_def, dynamic_box)
 
-  _ = handle_map.add(game.entity_map, Entity{
-    kind = .Block,
-    body_id = block_body_id,
-    shape_id = block_shape_id,
-    box_size = size,
-  })
+  entity.body_id = block_body_id
+  entity.shape_id = block_shape_id
+
+  ok = true
+  return
 }
 
-_game_add_projectile :: proc(game: ^Game, position: Vec2, velocity: Vec2 = 0) {
+_game_add_projectile :: proc(game: ^Game, position: Vec2, velocity: Vec2 = 0) -> (ok := false) {
+  entity_handle := handle_map.add(game.entity_map, Entity{
+    kind = .Projectile,
+  }) or_return
+
+  entity := handle_map.get(game.entity_map, entity_handle) or_return
+
   projectile_body_def := b2.DefaultBodyDef()
+  projectile_body_def.userData = transmute(rawptr)entity_handle
   projectile_body_def.type = .dynamicBody
   projectile_body_def.position = position
   projectile_body_def.linearVelocity = velocity
@@ -269,15 +306,24 @@ _game_add_projectile :: proc(game: ^Game, position: Vec2, velocity: Vec2 = 0) {
   circle: b2.Circle
   circle.radius = PROJECTILE_RADIUS
   shape_def := b2.DefaultShapeDef()
+  shape_def.userData = transmute(rawptr)entity_handle
   shape_def.density = PROJECTILE_DENSITY
   shape_def.material.friction = 0.3
+  shape_def.enableHitEvents = true
   projectile_shape_id := b2.CreateCircleShape(projectile_body_id, shape_def, circle)
 
-  _ = handle_map.add(game.entity_map, Entity{
-    kind = .Projectile,
-    body_id = projectile_body_id,
-    shape_id = projectile_shape_id,
-  })
+  entity.body_id = projectile_body_id
+  entity.shape_id = projectile_shape_id
+
+  ok = true
+  return
+}
+
+_game_remove_entity :: proc(game: ^Game, entity_handle: Entity_Handle) -> (ok := false) {
+  entity := handle_map.get(game.entity_map, entity_handle) or_return
+  b2.DestroyShape(entity.shape_id, updateBodyMass = false)
+  b2.DestroyBody(entity.body_id)
+  return handle_map.remove(game.entity_map, entity_handle)
 }
 
 _draw_point :: proc(point: Vec2, radius: f32 = 3, color := rl.MAGENTA) {
@@ -286,4 +332,25 @@ _draw_point :: proc(point: Vec2, radius: f32 = 3, color := rl.MAGENTA) {
     radius = radius,
     color = color,
   )
+}
+
+_calculate_damage :: proc(approach_speed: f32) -> f32 {
+  t := approach_speed / 1000
+  return math.lerp(f32(MIN_DAMAGE), f32(MAX_DAMAGE), t)
+}
+
+@(rodata) entity_colors := [Entity_Kind]rl.Color{
+  .Ground     = { 0, 255, 0, 255 },
+  .Block      = { 255, 0, 0, 255 },
+  .Projectile = { 0, 0, 255, 255 },
+}
+
+_get_entity_color :: proc(entity: Entity) -> rl.Color {
+  color := entity_colors[entity.kind]
+  if entity.kind == .Block {
+    f32_color := cast(Vec4)color
+    f32_color.rgb *= entity.health / BLOCK_MAX_HEALTH
+    color = cast(rl.Color)(f32_color)
+  }
+  return color
 }
