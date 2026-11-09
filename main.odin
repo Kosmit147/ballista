@@ -13,8 +13,6 @@ WINDOW_HEIGHT :: 1440
 TARGET_FPS    :: 60
 
 g_context: runtime.Context
-g_static_lifetime_arena: virtual.Arena
-g_static_lifetime_allocator: runtime.Allocator
 
 main :: proc() {
   context.assertion_failure_proc = trace.assertion_failure_proc
@@ -34,10 +32,6 @@ main :: proc() {
 
   g_context = context
 
-  _ = virtual.arena_init_growing(&g_static_lifetime_arena)
-  g_static_lifetime_allocator = virtual.arena_allocator(&g_static_lifetime_arena)
-  defer virtual.arena_destroy(&g_static_lifetime_arena)
-
   rl.InitWindow(width = WINDOW_WIDTH, height = WINDOW_HEIGHT, title = GAME_NAME)
   defer rl.CloseWindow()
   rl.SetTargetFPS(TARGET_FPS)
@@ -50,6 +44,6 @@ main :: proc() {
     free_all(context.temp_allocator)
     dt := rl.GetFrameTime()
     game_update(&game, dt)
-    game_draw(game)
+    game_draw(&game)
   }
 }

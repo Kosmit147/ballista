@@ -51,55 +51,68 @@ Entity :: struct {
   shape_id: b2.ShapeId,
   box_size: Vec2,
   health: f32,
+  block_material: Material,
 }
 
 Entity_Map :: handle_map.Static_Handle_Map(MAX_ENTITIES, Entity, Entity_Handle)
 
 Game :: struct {
-  camera: rl.Camera2D,
   world: b2.WorldId,
   entity_map: ^Entity_Map,
+  camera: rl.Camera2D,
+
   aiming: bool,
   aimed_projectile_position: Vec2,
   aimed_projectile_velocity: Vec2,
 
   background_texture: rl.Texture2D,
+  block_textures: [Material][Damage_Level]rl.Texture2D,
+}
 
-  wood_texture: rl.Texture2D,
-  wood_texture_npatch: rl.NPatchInfo,
+@(rodata) texture_paths := [Material][Damage_Level]cstring{
+  .Wood = {
+    .No_Damage = TEXTURES_DIR + "physics_elements/Wood elements/elementWood017.png",
+    .Low_Damage = TEXTURES_DIR + "physics_elements/Wood elements/elementWood022.png",
+    .High_Damage = TEXTURES_DIR + "physics_elements/Wood elements/elementWood049.png",
+  }
+}
+
+BLOCK_TEXTURE_NPATCH :: rl.NPatchInfo {
+  source = rl.Rectangle { 0, 0, 140, 140 },
+  left = 12,
+  top = 12,
+  right = 12,
+  bottom = 12,
+  layout = .NINE_PATCH,
 }
 
 game_init :: proc(game: ^Game) {
   b2.SetLengthUnitsPerMeter(PIXELS_PER_METER)
-
-  game.background_texture = rl.LoadTexture(
-    TEXTURES_DIR + "background_elements_remastered/Backgrounds/backgroundCastles.png",
-  )
-  game.wood_texture = rl.LoadTexture(TEXTURES_DIR + "physics_elements/Wood elements/elementWood010.png")
-  game.wood_texture_npatch = rl.NPatchInfo {
-    source = rl.Rectangle { 0, 0, 70, 70 },
-    left = 12,
-    top = 12,
-    right = 12,
-    bottom = 12,
-    layout = .NINE_PATCH,
-  }
-
-  game.entity_map = new(Entity_Map, g_static_lifetime_allocator)
-
-  game.camera.target = { 0, 0 }
-  game.camera.offset = { f32(rl.GetRenderWidth()) / 2, f32(rl.GetRenderHeight()) / 2 }
-  game.camera.rotation = 0
-  game.camera.zoom = 1
-
   world_def := b2.DefaultWorldDef()
   world_def.gravity = PHYSICS_GRAVITY
   world_def.enableSleep = PHYSICS_SLEEP_ENABLED
   world_def.workerCount = PHYSICS_THREADS
   game.world = b2.CreateWorld(world_def)
 
+  game.entity_map = new(Entity_Map)
+
   game.aimed_projectile_position = ANCHOR_POSITION
   game.aimed_projectile_velocity = 0
+
+  game.background_texture = rl.LoadTexture(
+    TEXTURES_DIR + "background_elements_remastered/Backgrounds/backgroundCastles.png",
+  )
+
+  for material in Material {
+    for damage_level in Damage_Level {
+      game.block_textures[material][damage_level] = rl.LoadTexture(texture_paths[material][damage_level])
+    }
+  }
+
+  game.camera.target = { 0, 0 }
+  game.camera.offset = { f32(rl.GetRenderWidth()) / 2, f32(rl.GetRenderHeight()) / 2 }
+  game.camera.rotation = 0
+  game.camera.zoom = 1
 
   _game_add_ground(game, { 0, 700 }, { 3000, 200 })
 
@@ -115,19 +128,23 @@ game_init :: proc(game: ^Game) {
   _game_add_block(game, { 200,   60 }, {  20, 200 })
   _game_add_block(game, { 100,  -50 }, { 220,  20 })
 
-  _game_add_block(game, {  50, -156 }, {  20, 200 }, math.to_radians_f32(24))
-  _game_add_block(game, { 150, -156 }, {  20, 200 }, math.to_radians_f32(-24))
-
-  // for i in 0..<75 {
-  //   position := Vec2{ -75, 0 } + Vec2{ 2 * f32(i), 2 }
-  //   _game_add_block(game, position, size = { 1, 1 })
-  // }
+  _game_add_block(game, {  50, -156 }, {  20, 200 }, rotation = math.to_radians_f32(24))
+  _game_add_block(game, { 150, -156 }, {  20, 200 }, rotation = math.to_radians_f32(-24))
 }
 
 game_deinit :: proc(game: Game) {
-  b2.DestroyWorld(game.world)
-  rl.UnloadTexture(game.wood_texture)
+  for material in Material {
+    for damage_level in Damage_Level {
+      rl.UnloadTexture(game.block_textures[material][damage_level])
+    }
+  }
+
   rl.UnloadTexture(game.background_texture)
+
+  handle_map.clear(game.entity_map)
+  free(game.entity_map)
+
+  b2.DestroyWorld(game.world)
 }
 
 game_update :: proc(game: ^Game, dt: f32) {
@@ -202,7 +219,7 @@ game_update :: proc(game: ^Game, dt: f32) {
   }
 }
 
-game_draw :: proc(game: Game) {
+game_draw :: proc(game: ^Game) {
   rl.BeginDrawing()
   defer rl.EndDrawing()
 
@@ -242,66 +259,11 @@ game_draw :: proc(game: Game) {
 
     iterator := handle_map.iterator_make(game.entity_map)
     for entity, handle in handle_map.iterate(&iterator) {
-      entity_color := _get_entity_color(entity^)
-      switch entity.kind {
-      case .Ground:
-        transform := b2.Body_GetTransform(entity.body_id)
-        position := transform.p
-        rotation := transform.q
-        size := entity.box_size
-        rl.DrawRectanglePro(
-          rec = rl.Rectangle{
-            x = position.x,
-            y = position.y,
-            width = size.x,
-            height = size.y,
-          },
-          origin = size / 2,
-          rotation = linalg.to_degrees(b2.Rot_GetAngle(rotation)),
-          color = entity_color,
-        )
-        when DRAW_ORIGIN_POINTS { _draw_point(position) }
-      case .Block:
-        transform := b2.Body_GetTransform(entity.body_id)
-        position := transform.p
-        rotation := transform.q
-        size := entity.box_size
-        rl.DrawTextureNPatch(
-          texture = game.wood_texture,
-          nPatchInfo = game.wood_texture_npatch,
-          dstrec = rl.Rectangle{
-            x = position.x,
-            y = position.y,
-            width = size.x,
-            height = size.y,
-          },
-          origin = size / 2,
-          rotation = linalg.to_degrees(b2.Rot_GetAngle(rotation)),
-          tint = entity_color,
-        )
-        when DRAW_ORIGIN_POINTS { _draw_point(position) }
-      case .Projectile:
-        position := b2.Body_GetPosition(entity.body_id)
-        rl.DrawCircleV(
-          center = position,
-          radius = PROJECTILE_RADIUS,
-          color = entity_color,
-        )
-        when DRAW_ORIGIN_POINTS { _draw_point(position) }
-      }
+      _game_draw_entity(game, entity)
     }
 
-    rl.DrawCircleV(
-      center = ANCHOR_POSITION,
-      radius = 3,
-      color = rl.BLACK,
-    )
-
-    rl.DrawCircleV(
-      center = game.aimed_projectile_position,
-      radius = PROJECTILE_RADIUS,
-      color = entity_colors[.Projectile],
-    )
+    _draw_anchor()
+    _draw_projectile(game.aimed_projectile_position)
 
     defer rl.EndMode2D()
   }
@@ -331,7 +293,13 @@ _game_add_ground :: proc(game: ^Game, position: Vec2, size: Vec2) -> (ok := fals
   return
 }
 
-_game_add_block :: proc(game: ^Game, position: Vec2, size: Vec2, rotation: f32 = 0) -> (ok := false) {
+_game_add_block :: proc(
+  game: ^Game,
+  position: Vec2,
+  size: Vec2,
+  material: Material = .Wood,
+  rotation: f32 = 0,
+) -> (ok := false) {
   entity_handle := handle_map.add(game.entity_map, Entity{
     kind = .Block,
     box_size = size,
@@ -396,12 +364,54 @@ _game_remove_entity :: proc(game: ^Game, entity_handle: Entity_Handle) -> (ok :=
   return handle_map.remove(game.entity_map, entity_handle)
 }
 
-_draw_point :: proc(point: Vec2, radius: f32 = 3, color := rl.MAGENTA) {
-  rl.DrawCircleV(
-    center = point,
-    radius = radius,
-    color = color,
-  )
+_game_draw_entity :: proc(game: ^Game, entity: ^Entity) {
+  color := _get_entity_tint(entity^)
+  switch entity.kind {
+  case .Ground:
+    transform := b2.Body_GetTransform(entity.body_id)
+    position := transform.p
+    rotation := transform.q
+    size := entity.box_size
+    rl.DrawRectanglePro(
+      rec = rl.Rectangle{
+        x = position.x,
+        y = position.y,
+        width = size.x,
+        height = size.y,
+      },
+      origin = size / 2,
+      rotation = linalg.to_degrees(b2.Rot_GetAngle(rotation)),
+      color = color,
+    )
+    when DRAW_ORIGIN_POINTS { _draw_point(position) }
+  case .Block:
+    transform := b2.Body_GetTransform(entity.body_id)
+    position := transform.p
+    rotation := transform.q
+    size := entity.box_size
+    rl.DrawTextureNPatch(
+      texture = _game_get_block_texture(game, entity)^,
+      nPatchInfo = BLOCK_TEXTURE_NPATCH,
+      dstrec = rl.Rectangle{
+        x = position.x,
+        y = position.y,
+        width = size.x,
+        height = size.y,
+      },
+      origin = size / 2,
+      rotation = linalg.to_degrees(b2.Rot_GetAngle(rotation)),
+      tint = rl.WHITE,
+    )
+    when DRAW_ORIGIN_POINTS { _draw_point(position) }
+  case .Projectile:
+    position := b2.Body_GetPosition(entity.body_id)
+    rl.DrawCircleV(
+      center = position,
+      radius = PROJECTILE_RADIUS,
+      color = color,
+    )
+    when DRAW_ORIGIN_POINTS { _draw_point(position) }
+  }
 }
 
 _draw_trajectory :: proc(origin: Vec2, velocity: Vec2, points: uint, step: uint) {
@@ -413,9 +423,9 @@ _draw_trajectory :: proc(origin: Vec2, velocity: Vec2, points: uint, step: uint)
   }
 }
 
-_calculate_damage :: proc(approach_speed: f32) -> f32 {
-  t := approach_speed / 1000
-  return math.lerp(f32(MIN_DAMAGE), f32(MAX_DAMAGE), t)
+_game_get_block_texture :: proc(game: ^Game, block: ^Entity) -> ^rl.Texture2D {
+  damage_level := _get_block_damage_level(block)
+  return &game.block_textures[block.block_material][damage_level]
 }
 
 @(rodata) entity_colors := [Entity_Kind]rl.Color{
@@ -424,7 +434,7 @@ _calculate_damage :: proc(approach_speed: f32) -> f32 {
   .Projectile = { 0, 0, 255, 255 },
 }
 
-_get_entity_color :: proc(entity: Entity) -> rl.Color {
+_get_entity_tint :: proc(entity: Entity) -> rl.Color {
   color := entity_colors[entity.kind]
   if entity.kind == .Block {
     f32_color := cast(Vec4)color
@@ -432,4 +442,55 @@ _get_entity_color :: proc(entity: Entity) -> rl.Color {
     color = cast(rl.Color)(f32_color)
   }
   return color
+}
+
+_draw_point :: proc(point: Vec2, radius: f32 = 3, color := rl.MAGENTA) {
+  rl.DrawCircleV(
+    center = point,
+    radius = radius,
+    color = color,
+  )
+}
+
+_draw_anchor :: proc() {
+  rl.DrawCircleV(
+    center = ANCHOR_POSITION,
+    radius = 3,
+    color = rl.BLACK,
+  )
+}
+
+_draw_projectile :: proc(position: Vec2) {
+  rl.DrawCircleV(
+    center = position,
+    radius = PROJECTILE_RADIUS,
+    color = entity_colors[.Projectile],
+  )
+}
+
+_calculate_damage :: proc(approach_speed: f32) -> f32 {
+  t := approach_speed / 1000
+  return math.lerp(f32(MIN_DAMAGE), f32(MAX_DAMAGE), t)
+}
+
+_get_block_damage_level :: proc(entity: ^Entity) -> Damage_Level {
+  health_factor := entity.health / BLOCK_MAX_HEALTH
+  switch health_factor {
+  case 0.75..=1000.0:
+    return .No_Damage
+  case 0.3..<0.75:
+    return .Low_Damage
+  case:
+    return .High_Damage
+  }
+}
+
+Material :: enum {
+  Wood,
+}
+
+Damage_Level :: enum {
+  No_Damage,
+  Low_Damage,
+  High_Damage,
 }
