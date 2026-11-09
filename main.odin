@@ -7,7 +7,7 @@ import "core:log"
 import "core:debug/trace"
 import "core:mem/virtual"
 
-GAME_NAME     :: "Ballista"
+GAME_NAME     :: "SLING"
 WINDOW_WIDTH  :: 2560
 WINDOW_HEIGHT :: 1440
 TARGET_FPS    :: 60

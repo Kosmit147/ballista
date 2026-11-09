@@ -7,6 +7,7 @@ import "core:container/handle_map"
 import "core:log"
 import "core:math"
 import "core:math/linalg"
+import "core:fmt"
 
 TEXTURES_DIR :: "assets/textures/"
 
@@ -15,8 +16,9 @@ PROJECTILE_RADIUS            :: 10
 PROJECTILE_DENSITY           :: 2.5
 PROJECTILE_COLOR             :: rl.BLUE
 ANCHOR_POSITION              :: Vec2{ -1000, 400 }
+ANCHOR_COLOR                 :: rl.BLUE
 MAX_DISTANCE_TO_ANCHOR       :: 160
-DRAW_ORIGIN_POINTS           :: true
+DRAW_ORIGIN_POINTS           :: false
 PROJECTILE_TRAJECTORY_POINTS :: 20
 PROJECTILE_TRAJECTORY_STEP   :: 10
 
@@ -60,6 +62,8 @@ Game :: struct {
   world: b2.WorldId,
   entity_map: ^Entity_Map,
   camera: rl.Camera2D,
+
+  points: u32,
 
   aiming: bool,
   aimed_projectile_position: Vec2,
@@ -247,21 +251,10 @@ game_draw :: proc(game: ^Game) {
   defer rl.EndDrawing()
 
   rl.ClearBackground(rl.WHITE)
-  rl.DrawFPS(10, 10)
 
   {
     rl.BeginMode2D(game.camera)
-
-    font_size := i32(40)
-    text_width := rl.MeasureText(GAME_NAME, font_size)
-
-    rl.DrawText(
-      text = GAME_NAME,
-      posX = -text_width / 2,
-      posY = -font_size / 2,
-      fontSize = font_size,
-      color = rl.BLACK,
-    )
+    defer rl.EndMode2D()
 
     rl.DrawTextureEx(
       texture = game.background_texture,
@@ -269,6 +262,17 @@ game_draw :: proc(game: ^Game) {
       rotation = 0,
       scale = 3,
       tint = rl.WHITE,
+    )
+
+    font_size := i32(40)
+    text_width := rl.MeasureText(GAME_NAME, font_size)
+
+    rl.DrawText(
+      text = GAME_NAME,
+      posX = -text_width / 2,
+      posY = -font_size / 2 - 500,
+      fontSize = font_size,
+      color = rl.BLACK,
     )
 
     if game.aiming {
@@ -285,11 +289,19 @@ game_draw :: proc(game: ^Game) {
       _game_draw_entity(game, entity)
     }
 
-    _draw_anchor()
+    // _draw_anchor()
     _draw_projectile(game.aimed_projectile_position)
-
-    defer rl.EndMode2D()
   }
+
+  rl.DrawText(
+    text = fmt.ctprintf("Points: %v", game.points),
+    posX = 10,
+    posY = 10,
+    fontSize = 40,
+    color = rl.BLACK,
+  )
+
+  rl.DrawFPS(2480, 10)
 }
 
 _game_add_ground :: proc(game: ^Game, position: Vec2, size: Vec2) -> (ok := false) {
@@ -383,6 +395,9 @@ _game_add_projectile :: proc(game: ^Game, position: Vec2, velocity: Vec2 = 0) ->
 
 _game_remove_entity :: proc(game: ^Game, entity_handle: Entity_Handle) -> (ok := false) {
   entity := handle_map.get(game.entity_map, entity_handle) or_return
+  if entity.kind == .Block {
+    game.points += points_per_material[entity.material]
+  }
   b2.DestroyShape(entity.shape_id, updateBodyMass = false)
   b2.DestroyBody(entity.body_id)
   return handle_map.remove(game.entity_map, entity_handle)
@@ -473,7 +488,7 @@ _draw_anchor :: proc() {
   rl.DrawCircleV(
     center = ANCHOR_POSITION,
     radius = 3,
-    color = rl.BLACK,
+    color = ANCHOR_COLOR,
   )
 }
 
@@ -508,10 +523,16 @@ Material :: enum {
   Metal,
 }
 
-@(rodata) max_health_by_material := [Material]f32 {
+@(rodata) max_health_by_material := [Material]f32{
   .Wood = 100,
   .Stone = 200,
   .Metal = 300,
+}
+
+@(rodata) points_per_material := [Material]u32{
+  .Wood = 10,
+  .Stone = 20,
+  .Metal = 30,
 }
 
 Damage_Level :: enum {
