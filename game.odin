@@ -27,9 +27,8 @@ PHYSICS_ENABLED        :: true
 PHYSICS_THREADS        :: 4
 PHYSICS_SLEEP_ENABLED  :: true
 
-BLOCK_MAX_HEALTH :: 100
-MIN_DAMAGE       :: 0
-MAX_DAMAGE       :: 80
+MIN_PROJECTILE_DAMAGE :: 0
+MAX_PROJECTILE_DAMAGE :: 80
 
 Vec2 :: [2]f32
 Vec3 :: [3]f32
@@ -52,7 +51,7 @@ Entity :: struct {
   shape_id: b2.ShapeId,
   box_size: Vec2,
   health: f32,
-  block_material: Material,
+  material: Material,
 }
 
 Entity_Map :: handle_map.Static_Handle_Map(MAX_ENTITIES, Entity, Entity_Handle)
@@ -77,7 +76,17 @@ Game :: struct {
     .No_Damage = TEXTURES_DIR + "physics_elements/Wood elements/elementWood017.png",
     .Low_Damage = TEXTURES_DIR + "physics_elements/Wood elements/elementWood022.png",
     .High_Damage = TEXTURES_DIR + "physics_elements/Wood elements/elementWood049.png",
-  }
+  },
+  .Stone = {
+    .No_Damage = TEXTURES_DIR + "physics_elements/Stone elements/elementStone017.png",
+    .Low_Damage = TEXTURES_DIR + "physics_elements/Stone elements/elementStone022.png",
+    .High_Damage = TEXTURES_DIR + "physics_elements/Stone elements/elementStone049.png",
+  },
+  .Metal = {
+    .No_Damage = TEXTURES_DIR + "physics_elements/Metal elements/elementMetal017.png",
+    .Low_Damage = TEXTURES_DIR + "physics_elements/Metal elements/elementMetal022.png",
+    .High_Damage = TEXTURES_DIR + "physics_elements/Metal elements/elementMetal049.png",
+  },
 }
 
 BLOCK_TEXTURE_NPATCH :: rl.NPatchInfo {
@@ -128,13 +137,13 @@ game_init :: proc(game: ^Game) {
 
   _game_add_ground(game, { 0, 700 }, { 3000, 200 })
 
-  _game_add_block(game, {   0,  500 }, {  20, 200 })
-  _game_add_block(game, { 200,  500 }, {  20, 200 })
-  _game_add_block(game, { 100,  390 }, { 220,  20 })
+  _game_add_block(game, {   0,  500 }, {  20, 200 }, .Metal)
+  _game_add_block(game, { 200,  500 }, {  20, 200 }, .Metal)
+  _game_add_block(game, { 100,  390 }, { 220,  20 }, .Metal)
 
-  _game_add_block(game, {   0,  280 }, {  20, 200 })
-  _game_add_block(game, { 200,  280 }, {  20, 200 })
-  _game_add_block(game, { 100,  170 }, { 220,  20 })
+  _game_add_block(game, {   0,  280 }, {  20, 200 }, .Stone)
+  _game_add_block(game, { 200,  280 }, {  20, 200 }, .Stone)
+  _game_add_block(game, { 100,  170 }, { 220,  20 }, .Stone)
 
   _game_add_block(game, {   0,   60 }, {  20, 200 })
   _game_add_block(game, { 200,   60 }, {  20, 200 })
@@ -317,7 +326,8 @@ _game_add_block :: proc(
   entity_handle := handle_map.add(game.entity_map, Entity{
     kind = .Block,
     box_size = size,
-    health = BLOCK_MAX_HEALTH,
+    health = max_health_by_material[material],
+    material = material,
   }) or_return
 
   entity := handle_map.get(game.entity_map, entity_handle) or_return
@@ -434,7 +444,7 @@ _game_get_entity_texture_and_color :: proc(game: ^Game, entity: Entity) -> (rl.T
     return game.white_texture, rl.GREEN
   case .Block:
     damage_level := _get_block_damage_level(entity)
-    return game.block_textures[entity.block_material][damage_level], rl.WHITE
+    return game.block_textures[entity.material][damage_level], rl.WHITE
   case .Projectile:
     return game.white_texture, PROJECTILE_COLOR
   }
@@ -477,11 +487,11 @@ _draw_projectile :: proc(position: Vec2) {
 
 _calculate_damage :: proc(approach_speed: f32) -> f32 {
   t := approach_speed / 1000
-  return math.lerp(f32(MIN_DAMAGE), f32(MAX_DAMAGE), t)
+  return math.lerp(f32(MIN_PROJECTILE_DAMAGE), f32(MAX_PROJECTILE_DAMAGE), t)
 }
 
 _get_block_damage_level :: proc(entity: Entity) -> Damage_Level {
-  health_factor := entity.health / BLOCK_MAX_HEALTH
+  health_factor := entity.health / max_health_by_material[entity.material]
   switch health_factor {
   case 0.75..=1000.0:
     return .No_Damage
@@ -494,6 +504,14 @@ _get_block_damage_level :: proc(entity: Entity) -> Damage_Level {
 
 Material :: enum {
   Wood,
+  Stone,
+  Metal,
+}
+
+@(rodata) max_health_by_material := [Material]f32 {
+  .Wood = 100,
+  .Stone = 200,
+  .Metal = 300,
 }
 
 Damage_Level :: enum {
