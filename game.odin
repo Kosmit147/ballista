@@ -8,11 +8,11 @@ import "core:log"
 import "core:math"
 import "core:math/linalg"
 
-RENDER_SCALE           :: 20
-PROJECTILE_RADIUS      :: 0.5
+PIXELS_PER_METER       :: 20
+PROJECTILE_RADIUS      :: 10
 PROJECTILE_DENSITY     :: 2.5
-ANCHOR_POSITION        :: Vec2{ -50, 20 }
-MAX_DISTANCE_TO_ANCHOR :: 8
+ANCHOR_POSITION        :: Vec2{ -1000, 400 }
+MAX_DISTANCE_TO_ANCHOR :: 160
 PHYSICS_ENABLED        :: true
 PHYSICS_THREADS        :: 4
 PHYSICS_SLEEP_ENABLED  :: true
@@ -56,6 +56,8 @@ Game :: struct {
 }
 
 game_init :: proc(game: ^Game) {
+  b2.SetLengthUnitsPerMeter(PIXELS_PER_METER)
+
   game.entity_map = new(Entity_Map, g_static_lifetime_allocator)
 
   game.camera.target = { 0, 0 }
@@ -64,7 +66,7 @@ game_init :: proc(game: ^Game) {
   game.camera.zoom = 1
 
   world_def := b2.DefaultWorldDef()
-  world_def.gravity = { 0, 10 }
+  world_def.gravity = { 0, 10 * PIXELS_PER_METER }
   world_def.enableSleep = PHYSICS_SLEEP_ENABLED
   world_def.workerCount = PHYSICS_THREADS
   game.world = b2.CreateWorld(world_def)
@@ -73,9 +75,9 @@ game_init :: proc(game: ^Game) {
 
   {
     ground_body_def := b2.DefaultBodyDef()
-    ground_body_def.position = { 0, 35 }
+    ground_body_def.position = { 0, 700 }
     ground_body_id := b2.CreateBody(game.world, ground_body_def)
-    ground_box := b2.MakeBox(halfWidth = 150.0 / 2.0, halfHeight = 10.0 / 2.0)
+    ground_box := b2.MakeBox(halfWidth = 3000.0 / 2.0, halfHeight = 200.0 / 2.0)
     ground_shape_def := b2.DefaultShapeDef()
     ground_shape_id := b2.CreatePolygonShape(ground_body_id, ground_shape_def, ground_box)
 
@@ -83,24 +85,24 @@ game_init :: proc(game: ^Game) {
       kind = .Ground,
       body_id = ground_body_id,
       shape_id = ground_shape_id,
-      box_size = { 150, 10 },
+      box_size = { 3000, 200 },
     })
   }
 
-  _game_add_block(game, {    0,   25 }, {    1,   10 })
-  _game_add_block(game, {   10,   25 }, {    1,   10 })
-  _game_add_block(game, {    5, 19.5 }, {   11,    1 })
+  _game_add_block(game, {   0,  500 }, {  20, 200 })
+  _game_add_block(game, { 200,  500 }, {  20, 200 })
+  _game_add_block(game, { 100,  390 }, { 220,  20 })
 
-  _game_add_block(game, {    0,   14 }, {    1,   10 })
-  _game_add_block(game, {   10,   14 }, {    1,   10 })
-  _game_add_block(game, {    5,  8.5 }, {   11,   1  })
+  _game_add_block(game, {   0,  280 }, {  20, 200 })
+  _game_add_block(game, { 200,  280 }, {  20, 200 })
+  _game_add_block(game, { 100,  170 }, { 220,  20 })
 
-  _game_add_block(game, {    0,     3 }, {    1,   10 })
-  _game_add_block(game, {   10,     3 }, {    1,   10 })
-  _game_add_block(game, {    5,  -2.5 }, {   11,   1  })
+  _game_add_block(game, {   0,   60 }, {  20, 200 })
+  _game_add_block(game, { 200,   60 }, {  20, 200 })
+  _game_add_block(game, { 100,  -50 }, { 220,  20 })
 
-  _game_add_block(game, { 2.5, -7.8 }, { 1, 10 }, math.to_radians_f32(24))
-  _game_add_block(game, { 7.5, -7.8 }, { 1, 10 }, math.to_radians_f32(-24))
+  _game_add_block(game, {  50, -156 }, {  20, 200 }, math.to_radians_f32(24))
+  _game_add_block(game, { 150, -156 }, {  20, 200 }, math.to_radians_f32(-24))
 
   // for i in 0..<75 {
   //   position := Vec2{ -75, 0 } + Vec2{ 2 * f32(i), 2 }
@@ -124,7 +126,7 @@ game_update :: proc(game: ^Game, dt: f32) {
   if rl.IsKeyDown(.UP)   do game.camera.zoom *= 1 + (CAMERA_ZOOM_SPEED * dt)
   if rl.IsKeyDown(.DOWN) do game.camera.zoom *= 1 - (CAMERA_ZOOM_SPEED * dt)
 
-  pointer_position := rl.GetScreenToWorld2D(rl.GetMousePosition(), game.camera) / RENDER_SCALE
+  pointer_position := rl.GetScreenToWorld2D(rl.GetMousePosition(), game.camera)
 
   if rl.IsMouseButtonDown(.LEFT) {
     projectile_offset := linalg.clamp_length(pointer_position - ANCHOR_POSITION, MAX_DISTANCE_TO_ANCHOR)
@@ -178,36 +180,36 @@ game_draw :: proc(game: Game) {
         size := entity.box_size
         rl.DrawRectanglePro(
           rec = rl.Rectangle{
-            x = position.x * RENDER_SCALE,
-            y = position.y * RENDER_SCALE,
-            width = size.x * RENDER_SCALE,
-            height = size.y * RENDER_SCALE,
+            x = position.x,
+            y = position.y,
+            width = size.x,
+            height = size.y,
           },
-          origin = size / 2 * RENDER_SCALE,
+          origin = size / 2,
           rotation = linalg.to_degrees(b2.Rot_GetAngle(rotation)),
           color = entity_color,
         )
-        when DRAW_ORIGIN_POINTS { _draw_debug_point(position) }
+        when DRAW_ORIGIN_POINTS { _draw_point(position) }
       case .Projectile:
         position := b2.Body_GetPosition(entity.body_id)
         rl.DrawCircleV(
-          center = position * RENDER_SCALE,
-          radius = PROJECTILE_RADIUS * RENDER_SCALE,
+          center = position,
+          radius = PROJECTILE_RADIUS,
           color = entity_color,
         )
-        when DRAW_ORIGIN_POINTS { _draw_debug_point(position) }
+        when DRAW_ORIGIN_POINTS { _draw_point(position) }
       }
     }
 
     rl.DrawCircleV(
-      center = ANCHOR_POSITION * RENDER_SCALE,
-      radius = 0.15 * RENDER_SCALE,
+      center = ANCHOR_POSITION,
+      radius = 3,
       color = rl.BLACK,
     )
 
     rl.DrawCircleV(
-      center = game.projectile_position * RENDER_SCALE,
-      radius = PROJECTILE_RADIUS * RENDER_SCALE,
+      center = game.projectile_position,
+      radius = PROJECTILE_RADIUS,
       color = entity_colors[.Projectile],
     )
 
@@ -219,18 +221,18 @@ game_draw :: proc(game: Game) {
 
     //   rl.DrawRectanglePro(
     //     rec = rl.Rectangle{
-    //       x = test_position.x * RENDER_SCALE,
-    //       y = test_position.y * RENDER_SCALE,
-    //       width = test_size.x * RENDER_SCALE,
-    //       height = test_size.y * RENDER_SCALE,
+    //       x = test_position.x,
+    //       y = test_position.y,
+    //       width = test_size.x,
+    //       height = test_size.y,
     //     },
-    //     origin = test_size / 2 * RENDER_SCALE,
+    //     origin = test_size / 2,
     //     rotation = rotation,
     //     color = rl.BLUE,
     //   )
     //   rl.DrawCircleV(
-    //     center = test_position * RENDER_SCALE,
-    //     radius = 0.2 * RENDER_SCALE,
+    //     center = test_position,
+    //     radius = 0.2,
     //     color = rl.BLACK,
     //   )
     // }
@@ -278,10 +280,10 @@ _game_add_projectile :: proc(game: ^Game, position: Vec2, velocity: Vec2 = 0) {
   })
 }
 
-_draw_debug_point :: proc(point: Vec2, radius: f32 = 0.2, color := rl.MAGENTA) {
+_draw_point :: proc(point: Vec2, radius: f32 = 3, color := rl.MAGENTA) {
   rl.DrawCircleV(
-    center = point * RENDER_SCALE,
-    radius = radius * RENDER_SCALE,
+    center = point,
+    radius = radius,
     color = color,
   )
 }
