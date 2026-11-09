@@ -14,7 +14,6 @@ TEXTURES_DIR :: "assets/textures/"
 PIXELS_PER_METER             :: 20
 PROJECTILE_RADIUS            :: 10
 PROJECTILE_DENSITY           :: 2.5
-PROJECTILE_COLOR             :: rl.BLUE
 ANCHOR_POSITION              :: Vec2{ -1000, 400 }
 ANCHOR_COLOR                 :: rl.BLUE
 MAX_DISTANCE_TO_ANCHOR       :: 160
@@ -54,6 +53,7 @@ Entity :: struct {
   box_size: Vec2,
   health: f32,
   material: Material,
+  projectile_kind: Projectile_Kind,
 }
 
 Entity_Map :: handle_map.Static_Handle_Map(MAX_ENTITIES, Entity, Entity_Handle)
@@ -66,6 +66,7 @@ Game :: struct {
   points: u32,
 
   aiming: bool,
+  aimed_projectile_kind: Projectile_Kind,
   aimed_projectile_position: Vec2,
   aimed_projectile_velocity: Vec2,
 
@@ -186,6 +187,14 @@ game_update :: proc(game: ^Game, dt: f32) {
   if rl.IsKeyDown(.UP)   do game.camera.zoom *= 1 + (CAMERA_ZOOM_SPEED * dt)
   if rl.IsKeyDown(.DOWN) do game.camera.zoom *= 1 - (CAMERA_ZOOM_SPEED * dt)
 
+  if rl.IsKeyPressed(.ONE) {
+    game.aimed_projectile_kind = .Default
+  } else if rl.IsKeyPressed(.TWO) {
+    game.aimed_projectile_kind = .Bouncy
+  } else if rl.IsKeyPressed(.THREE) {
+    game.aimed_projectile_kind = .Explosive
+  }
+
   pointer_position := rl.GetScreenToWorld2D(rl.GetMousePosition(), game.camera)
 
   {
@@ -201,11 +210,11 @@ game_update :: proc(game: ^Game, dt: f32) {
       game.aiming = false
       game.aimed_projectile_position = ANCHOR_POSITION
       game.aimed_projectile_velocity = 0
-      _game_add_projectile(game, projectile_position, projectile_velocity)
+      _game_add_projectile(game, game.aimed_projectile_kind, projectile_position, projectile_velocity)
     }
 
     if rl.IsMouseButtonPressed(.RIGHT) {
-      _game_add_projectile(game, pointer_position)
+      _game_add_projectile(game, game.aimed_projectile_kind, pointer_position)
     }
   }
 
@@ -290,7 +299,7 @@ game_draw :: proc(game: ^Game) {
     }
 
     // _draw_anchor()
-    _draw_projectile(game.aimed_projectile_position)
+    _draw_projectile(game.aimed_projectile_position, game.aimed_projectile_kind)
   }
 
   rl.DrawText(
@@ -364,9 +373,15 @@ _game_add_block :: proc(
   return
 }
 
-_game_add_projectile :: proc(game: ^Game, position: Vec2, velocity: Vec2 = 0) -> (ok := false) {
+_game_add_projectile :: proc(
+  game: ^Game,
+  projectile_kind: Projectile_Kind,
+  position: Vec2,
+  velocity: Vec2 = 0,
+) -> (ok := false) {
   entity_handle := handle_map.add(game.entity_map, Entity{
     kind = .Projectile,
+    projectile_kind = projectile_kind,
   }) or_return
 
   entity := handle_map.get(game.entity_map, entity_handle) or_return
@@ -383,6 +398,7 @@ _game_add_projectile :: proc(game: ^Game, position: Vec2, velocity: Vec2 = 0) ->
   shape_def.userData = transmute(rawptr)entity_handle
   shape_def.density = PROJECTILE_DENSITY
   shape_def.material.friction = 0.3
+  shape_def.material.restitution = restitution_by_projectile_kind[projectile_kind]
   shape_def.enableHitEvents = true
   projectile_shape_id := b2.CreateCircleShape(projectile_body_id, shape_def, circle)
 
@@ -461,7 +477,7 @@ _game_get_entity_texture_and_color :: proc(game: ^Game, entity: Entity) -> (rl.T
     damage_level := _get_block_damage_level(entity)
     return game.block_textures[entity.material][damage_level], rl.WHITE
   case .Projectile:
-    return game.white_texture, PROJECTILE_COLOR
+    return game.white_texture, color_by_projectile_kind[entity.projectile_kind]
   }
 
   return game.magenta_texture, rl.WHITE
@@ -492,11 +508,11 @@ _draw_anchor :: proc() {
   )
 }
 
-_draw_projectile :: proc(position: Vec2) {
+_draw_projectile :: proc(position: Vec2, kind: Projectile_Kind) {
   rl.DrawCircleV(
     center = position,
     radius = PROJECTILE_RADIUS,
-    color = PROJECTILE_COLOR,
+    color = color_by_projectile_kind[kind],
   )
 }
 
@@ -539,4 +555,22 @@ Damage_Level :: enum {
   No_Damage,
   Low_Damage,
   High_Damage,
+}
+
+Projectile_Kind :: enum {
+  Default,
+  Bouncy,
+  Explosive,
+}
+
+@(rodata) color_by_projectile_kind := [Projectile_Kind]rl.Color{
+  .Default = rl.BLUE,
+  .Bouncy = rl.GREEN,
+  .Explosive = rl.RED,
+}
+
+@(rodata) restitution_by_projectile_kind := [Projectile_Kind]f32{
+  .Default = 0.1,
+  .Bouncy = 0.9,
+  .Explosive = 0.1,
 }
